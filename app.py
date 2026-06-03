@@ -425,10 +425,22 @@ def formatar_percentual(valor):
     return f"{valor * 100:.2f}%"
 
 
-@st.cache_data
+@st.cache_data(ttl=600)
 def buscar_info(ticker):
-    ativo = yf.Ticker(ticker)
-    return ativo.info
+    import yfinance as yf
+
+    try:
+        ativo = yf.Ticker(ticker)
+        info = ativo.fast_info
+
+        return {
+            "preco": info.get("lastPrice"),
+            "market_cap": info.get("marketCap"),
+            "volume": info.get("lastVolume")
+        }
+
+    except Exception:
+        return None
 
 
 @st.cache_data(ttl=300)  # cache por 5 minutos
