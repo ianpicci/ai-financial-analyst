@@ -431,14 +431,28 @@ def buscar_info(ticker):
     return ativo.info
 
 
-@st.cache_data
+@st.cache_data(ttl=300)  # cache por 5 minutos
 def buscar_historico(ticker, periodo):
-    ativo = yf.Ticker(ticker)
+    import yfinance as yf
+    import time
 
-    if periodo == "1d":
-        return ativo.history(period="1d", interval="5m")
+    try:
+        ativo = yf.Ticker(ticker)
 
-    return ativo.history(period=periodo)
+        if periodo == "1d":
+            return ativo.history(period="1d", interval="30m")
+        else:
+            return ativo.history(period=periodo)
+
+    except Exception as e:
+        st.warning("⚠️ Muitos acessos. Tentando novamente...")
+        time.sleep(2)
+
+        try:
+            return ativo.history(period="5d")  # fallback
+        except:
+            st.error("Erro ao buscar dados. Tente novamente em instantes.")
+            return None
 
 
 def calcular_dividend_yield_12m(ativo, preco_atual):
