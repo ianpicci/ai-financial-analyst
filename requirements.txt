@@ -1,5 +1,8 @@
 streamlit
 yfinance
+plotly
 pandas
+numpy
 openai
 python-dotenv
+requests
