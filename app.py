@@ -425,65 +425,323 @@ def formatar_percentual(valor):
     return f"{valor * 100:.2f}%"
 
 
-@st.cache_data(ttl=600)
-def buscar_info(ticker):
-    import yfinance as yf
-
-    try:
-        ativo = yf.Ticker(ticker)
-        info = ativo.fast_info
-
-        return {
-            "preco": info.get("lastPrice"),
-            "market_cap": info.get("marketCap"),
-            "volume": info.get("lastVolume")
-        }
-
-    except Exception:
-        return None
-
-
-@st.cache_data(ttl=300)  # cache por 5 minutos
-def buscar_historico(ticker, periodo):
-    import yfinance as yf
-    import time
-
-    try:
-        ativo = yf.Ticker(ticker)
-
-        if periodo == "1d":
-            return ativo.history(period="1d", interval="30m")
-        else:
-            return ativo.history(period=periodo)
-
-    except Exception as e:
-        st.warning("⚠️ Muitos acessos. Tentando novamente...")
-        time.sleep(2)
-
-        try:
-            return ativo.history(period="5d")  # fallback
-        except:
-            st.error("Erro ao buscar dados. Tente novamente em instantes.")
-            return None
-
-
-def calcular_dividend_yield_12m(ativo, preco_atual):
-    dividendos = ativo.dividends
-
-    if dividendos.empty or preco_atual == 0:
+def formatar_percentual_de_valor_percentual(valor):
+    if not valor_valido(valor):
         return "N/A"
 
-    data_limite = pd.Timestamp.now(tz=dividendos.index.tz) - pd.DateOffset(months=12)
-    dividendos_12m = dividendos[dividendos.index >= data_limite]
-
-    total_dividendos_12m = dividendos_12m.sum()
-    dividend_yield = total_dividendos_12m / preco_atual
-
-    return f"{dividend_yield * 100:.2f}%"
+    return f"{valor:.2f}%"
 
 
-def calcular_cagr_5a(ativo):
-    historico_5a = buscar_historico(ativo.ticker, "5y")
+def obter_brapi_token():
+    return os.getenv("BRAPI_API_KEY") or os.getenv("BRAPI_TOKEN")
+
+
+def normalizar_ticker_brapi(ticker):
+    return ticker.strip().upper().replace(".SA", "")
+
+
+def obter_valor_aninhado(dados, caminhos):
+    for caminho in caminhos:
+        atual = dados
+        for parte in caminho.split("."):
+            if not isinstance(atual, dict) or parte not in atual:
+                atual = None
+                break
+            atual = atual.get(parte)
+
+        if valor_valido(atual):
+            return atual
+
+    return None
+
+
+def executar_requisicao_brapi(ticker, params=None):
+    ticker = normalizar_ticker_brapi(ticker)
+    token = obter_brapi_token()
+    url = f"https://brapi.dev/api/quote/{ticker}"
+    headers = {}
+    params = params.copy() if params else {}
+
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    response = requests.get(url, params=params, headers=headers, timeout=20)
+
+    if response.status_code == 401:
+        raise ValueError("Token da brapi ausente ou invÃ¡lido. Configure BRAPI_API_KEY no ambiente do site.")
+
+    if response.status_code == 429:
+        raise ValueError("Limite de requisiÃ§Ãµes da brapi excedido. Tente novamente em alguns minutos ou aumente o plano da API.")
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    if data.get("error"):
+        raise ValueError(data.get("message", "Erro ao consultar a brapi."))
+
+    resultados = data.get("results", [])
+
+    if not resultados:
+        return {}
+
+    return resultados[0]
+
+
+@st.cache_data(ttl=300)
+def buscar_info(ticker):
+    resultado = executar_requisicao_brapi(
+        ticker,
+        {
+            "modules": "summaryProfile,defaultKeyStatistics,financialData"
+        }
+    )
+
+    return {
+        "symbol": resultado.get("symbol"),
+        "shortName": resultado.get("shortName"),
+        "longName": resultado.get("longName") or resultado.get("shortName"),
+        "currency": resultado.get("currency", "BRL"),
+        "regularMarketPrice": resultado.get("regularMarketPrice"),
+        "regularMarketOpen": resultado.get("regularMarketOpen"),
+        "trailingPE": obter_valor_aninhado(resultado, [
+            "trailingPE",
+            "priceEarnings",
+            "defaultKeyStatistics.trailingPE",
+            "defaultKeyStatistics.priceEarnings",
+        ]),
+        "priceToBook": obter_valor_aninhado(resultado, [
+            "priceToBook",
+            "defaultKeyStatistics.priceToBook",
+        ]),
+        "payoutRatio": obter_valor_aninhado(resultado, [
+            "payoutRatio",
+            "defaultKeyStatistics.payoutRatio",
+        ]),
+        "profitMargins": obter_valor_aninhado(resultado, [
+            "profitMargins",
+            "financialData.profitMargins",
+        ]),
+        "grossMargins": obter_valor_aninhado(resultado, [
+            "grossMargins",
+            "financialData.grossMargins",
+        ]),
+        "ebitdaMargins": obter_valor_aninhado(resultado, [
+            "ebitdaMargins",
+            "financialData.ebitdaMargins",
+        ]),
+        "enterpriseToEbitda": obter_valor_aninhado(resultado, [
+            "enterpriseToEbitda",
+            "defaultKeyStatistics.enterpriseToEbitda",
+        ]),
+        "returnOnEquity": obter_valor_aninhado(resultado, [
+            "returnOnEquity",
+            "financialData.returnOnEquity",
+        ]),
+        "debtToEquity": obter_valor_aninhado(resultado, [
+            "debtToEquity",
+            "financialData.debtToEquity",
+        ]),
+        "dividendYield": obter_valor_aninhado(resultado, [
+            "dividendYield",
+            "defaultKeyStatistics.dividendYield",
+        ]),
+    }
+
+
+@st.cache_data(ttl=60)
+def buscar_historico(ticker, periodo):
+    intervalo = "5m" if periodo == "1d" else "1d"
+    resultado = executar_requisicao_brapi(
+        ticker,
+        {
+            "range": periodo,
+            "interval": intervalo
+        }
+    )
+
+    historico = resultado.get("historicalDataPrice", [])
+
+    if not historico:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(historico)
+
+    if "date" not in df.columns:
+        return pd.DataFrame()
+
+    df["Date"] = pd.to_datetime(df["date"], unit="s", errors="coerce")
+
+    colunas = {
+        "open": "Open",
+        "high": "High",
+        "low": "Low",
+        "close": "Close",
+        "volume": "Volume"
+    }
+
+    df = df.rename(columns=colunas)
+    colunas_necessarias = ["Open", "High", "Low", "Close"]
+
+    for coluna in colunas_necessarias:
+        if coluna not in df.columns:
+            return pd.DataFrame()
+
+    df = df.dropna(subset=["Date", "Close"]).set_index("Date").sort_index()
+
+    return df
+
+
+@st.cache_data(ttl=3600)
+def buscar_dividendos(ticker):
+    resultado = executar_requisicao_brapi(ticker, {"dividends": "true"})
+    dividendos_data = resultado.get("dividendsData") or {}
+    dividendos = dividendos_data.get("cashDividends") or dividendos_data.get("stockDividends") or []
+
+    if not dividendos:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(dividendos)
+
+    data_coluna = next((col for col in ["paymentDate", "lastDatePrior", "approvedOn", "date"] if col in df.columns), None)
+    valor_coluna = next((col for col in ["rate", "value", "amount", "cashDividends"] if col in df.columns), None)
+
+    if not data_coluna or not valor_coluna:
+        return pd.DataFrame()
+
+    df["Date"] = pd.to_datetime(df[data_coluna], errors="coerce")
+    df["Dividend"] = pd.to_numeric(df[valor_coluna], errors="coerce")
+    df = df.dropna(subset=["Date", "Dividend"]).set_index("Date").sort_index()
+
+    return df
+
+
+# Camada de dados ativa: usa yfinance com cache para reduzir o risco de rate limit.
+# As funcoes abaixo sobrescrevem as funcoes antigas da brapi acima.
+def erro_rate_limit(erro):
+    texto = str(erro).lower()
+    return "too many requests" in texto or "rate limit" in texto or "429" in texto
+
+
+def normalizar_historico_yfinance(df):
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    colunas = ["Open", "High", "Low", "Close", "Volume"]
+    colunas_existentes = [coluna for coluna in colunas if coluna in df.columns]
+    df = df[colunas_existentes].copy()
+
+    for coluna in ["Open", "High", "Low", "Close"]:
+        if coluna not in df.columns:
+            return pd.DataFrame()
+
+    return df.dropna(subset=["Close"]).sort_index()
+
+
+@st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
+def buscar_info(ticker):
+    ativo = yf.Ticker(ticker)
+    info = {
+        "symbol": ticker,
+        "shortName": ticker,
+        "longName": ticker,
+        "currency": "BRL" if ticker.endswith(".SA") else "USD",
+    }
+
+    try:
+        fast_info = dict(ativo.fast_info or {})
+        info["currency"] = fast_info.get("currency") or info["currency"]
+        info["regularMarketPrice"] = fast_info.get("last_price")
+        info["regularMarketOpen"] = fast_info.get("open")
+    except Exception:
+        pass
+
+    try:
+        info_yf = ativo.info or {}
+        info.update(info_yf)
+    except Exception as erro:
+        if erro_rate_limit(erro):
+            info["rate_limit"] = True
+        else:
+            info["info_error"] = str(erro)
+
+    return info
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def buscar_historico(ticker, periodo):
+    intervalo = "5m" if periodo == "1d" else "1d"
+
+    try:
+        if periodo == "15y":
+            inicio = (pd.Timestamp.today() - pd.DateOffset(years=15)).strftime("%Y-%m-%d")
+            historico = yf.download(
+                ticker,
+                start=inicio,
+                interval=intervalo,
+                progress=False,
+                auto_adjust=False,
+                threads=False
+            )
+        else:
+            historico = yf.download(
+                ticker,
+                period=periodo,
+                interval=intervalo,
+                progress=False,
+                auto_adjust=False,
+                threads=False
+            )
+
+        return normalizar_historico_yfinance(historico)
+
+    except Exception as erro:
+        if erro_rate_limit(erro):
+            raise RuntimeError("Yahoo Finance bloqueou temporariamente novas consultas por excesso de requests.")
+        raise
+
+
+@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
+def buscar_dividendos(ticker):
+    try:
+        dividendos = yf.Ticker(ticker).dividends
+    except Exception:
+        return pd.DataFrame()
+
+    if dividendos is None or dividendos.empty:
+        return pd.DataFrame()
+
+    return dividendos.to_frame(name="Dividend")
+
+
+def calcular_dividend_yield_12m(ticker, preco_atual, info):
+    dividendos = buscar_dividendos(ticker)
+
+    if not dividendos.empty and preco_atual != 0:
+        data_limite = pd.Timestamp.now(tz=dividendos.index.tz) - pd.DateOffset(months=12)
+        dividendos_12m = dividendos[dividendos.index >= data_limite]
+        total_dividendos_12m = dividendos_12m["Dividend"].sum()
+
+        if total_dividendos_12m > 0:
+            dividend_yield = total_dividendos_12m / preco_atual
+            return formatar_percentual(dividend_yield)
+
+    dy_anual = info.get("trailingAnnualDividendYield")
+    if valor_valido(dy_anual):
+        return formatar_percentual(dy_anual)
+
+    dy_info = info.get("dividendYield")
+    if valor_valido(dy_info):
+        return formatar_percentual_de_valor_percentual(dy_info)
+
+    return "N/A"
+
+
+def calcular_cagr_5a(ticker):
+    historico_5a = buscar_historico(ticker, "5y")
 
     if historico_5a.empty:
         return "N/A"
@@ -499,8 +757,8 @@ def calcular_cagr_5a(ativo):
     return f"{cagr * 100:.2f}%"
 
 
-def calcular_valor_investido(ativo, periodo, valor_investido):
-    historico_periodo = buscar_historico(ativo.ticker, periodo)
+def calcular_valor_investido(ticker, periodo, valor_investido):
+    historico_periodo = buscar_historico(ticker, periodo)
 
     if historico_periodo.empty or valor_investido <= 0:
         return None
@@ -861,7 +1119,6 @@ periodo = st.session_state.periodo
 
 
 try:
-    ativo = yf.Ticker(ticker)
     historico = buscar_historico(ticker, periodo)
 
     if historico.empty:
@@ -882,7 +1139,7 @@ try:
         abertura_dia = historico["Open"].iloc[0]
         variacao_periodo = ((preco_atual - preco_inicial) / preco_inicial) * 100
 
-        moeda = ativo.fast_info.get("currency", "BRL")
+        moeda = info.get("currency", "BRL")
 
         maxima_periodo = historico["High"].max()
         minima_periodo = historico["Low"].min()
@@ -908,7 +1165,7 @@ try:
         minima_data_str = _format_date_for_display(idx_min)
         maxima_data_str = _format_date_for_display(idx_max)
 
-        dividend_yield_formatado = calcular_dividend_yield_12m(ativo, preco_atual)
+        dividend_yield_formatado = calcular_dividend_yield_12m(ticker, preco_atual, info)
 
         with st.container(key="asset_header"):
             logo_col, text_col = st.columns([0.06, 1], gap="small")
@@ -1044,7 +1301,7 @@ try:
                 ("ROIC", "N/A"),
                 ("Dív. Líq. / Patrim.", formatar_numero(info.get("debtToEquity"))),
                 ("Dív. Líq. / EBITDA", "N/A"),
-                ("CAGR 5 anos", calcular_cagr_5a(ativo)),
+                ("CAGR 5 anos", calcular_cagr_5a(ticker)),
             ]
 
             st.markdown(
@@ -1088,7 +1345,7 @@ try:
                 "15A": "15y"
             }.get(investimento_periodo, "1y")
 
-            valor_final = calcular_valor_investido(ativo, periodo_investimento, valor_investido)
+            valor_final = calcular_valor_investido(ticker, periodo_investimento, valor_investido)
             cor_resultado = "green" if valor_final is not None and valor_final >= valor_investido else "red"
             texto_resultado = "N/A"
 
