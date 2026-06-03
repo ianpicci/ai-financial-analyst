@@ -641,6 +641,17 @@ def normalizar_historico_yfinance(df):
     return df.dropna(subset=["Close"]).sort_index()
 
 
+def filtrar_ultimo_pregao(df):
+    if df.empty:
+        return df
+
+    try:
+        ultimo_dia = df.index.max().date()
+        return df[df.index.date == ultimo_dia]
+    except Exception:
+        return df.tail(1)
+
+
 @st.cache_data(ttl=60 * 60 * 12, show_spinner=False)
 def buscar_info(ticker):
     ativo = yf.Ticker(ticker)
@@ -696,7 +707,30 @@ def buscar_historico(ticker, periodo):
                 threads=False
             )
 
-        return normalizar_historico_yfinance(historico)
+        historico = normalizar_historico_yfinance(historico)
+
+        if historico.empty and periodo == "1d":
+            tentativas_fallback = [
+                ("2d", "5m"),
+                ("5d", "15m"),
+                ("5d", "1d"),
+            ]
+
+            for periodo_fallback, intervalo_fallback in tentativas_fallback:
+                historico_fallback = yf.download(
+                    ticker,
+                    period=periodo_fallback,
+                    interval=intervalo_fallback,
+                    progress=False,
+                    auto_adjust=False,
+                    threads=False
+                )
+                historico = normalizar_historico_yfinance(historico_fallback)
+
+                if not historico.empty:
+                    return filtrar_ultimo_pregao(historico)
+
+        return historico
 
     except Exception as erro:
         if erro_rate_limit(erro):
