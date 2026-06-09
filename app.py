@@ -87,48 +87,55 @@ st.markdown("""
     background-color: #eef0f3;
     border: 1px solid #b8bec8;
     border-radius: 14px;
-    padding: 12px 16px 18px 16px;
+    padding: 22px 25px 30px 25px;
     margin-bottom: 24px;
 }
 
 .st-key-asset_header [data-testid="stHorizontalBlock"] {
-    align-items: center;
+    align-items: center !important;
     gap: 4px;
 }
 
 .logo-fallback {
-    width: 64px;
-    height: 64px;
+    width: 80px;
+    height: 80px;
     border-radius: 12px;
     background-color: #1f2937;
     color: white;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 26px;
+    font-size: 32px;
     font-weight: 800;
     margin: 0 !important;
     flex-shrink: 0;
 }
 
+.asset-logo {
+    width: 80px;
+    height: 80px;
+    border-radius: 12px;
+    background-color: white;
+    object-fit: contain;
+    padding: 5px;
+    border: 1px solid #b8bec8;
+    flex-shrink: 0;
+}
+
 .asset-ticker {
-    font-size: 26px;
+    font-size: 32px;
     font-weight: 800;
     color: #111827;
-    margin-bottom: 4px;
+    line-height: 1;
+    margin-bottom: 0px;
 }
 
 .asset-name {
-    font-size: 15px;
-    font-weight: 500;
+    font-size: 18px;
+    font-weight: 600;
     color: #4b5563;
-    margin-bottom: 4px;
-}
-
-.asset-name {
-    font-size: 15px;
-    font-weight: 500;
-    color: #4b5563;
+    line-height: 1.2;
+    margin-top: 2px;
 }
 
 /* ===== CARDS NUMÉRICOS ===== */
@@ -789,6 +796,15 @@ def buscar_info(ticker):
         else:
             info["info_error"] = str(erro)
 
+    # Fallback para logo via brapi caso o yfinance não retorne (comum em .SA)
+    if not info.get("logo_url"):
+        try:
+            brapi_res = executar_requisicao_brapi(ticker)
+            if brapi_res.get("logourl"):
+                info["logo_url"] = brapi_res.get("logourl")
+        except:
+            pass
+
     return info
 
 
@@ -1230,6 +1246,9 @@ if "analise_ia" not in st.session_state:
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = carregar_watchlist()
 
+if "lista_selecionada" not in st.session_state:
+    st.session_state.lista_selecionada = list(st.session_state.watchlist.keys())[0] if st.session_state.watchlist else "Favoritos"
+
 if "listas_periodo" not in st.session_state:
     st.session_state.listas_periodo = "1d"
 
@@ -1258,12 +1277,15 @@ with st.container(key="top_bar"):
     with top_col_nav:
         nav_col, refresh_col = st.columns([0.8, 0.2])
         with nav_col:
-            st.session_state.pagina = st.selectbox(
+            selected_nav_page = st.selectbox(
                 "Navegação",
                 ["Análise", "Listas"],
                 label_visibility="collapsed",
                 index=0 if st.session_state.pagina == "Análise" else 1
             )
+            if selected_nav_page != st.session_state.pagina:
+                st.session_state.pagina = selected_nav_page
+                st.rerun()
         with refresh_col:
             if st.button("🔄", help=f"Forçar atualização de dados. Última atualização: {st.session_state.last_updated}"):
                 st.cache_data.clear()
@@ -1338,6 +1360,7 @@ def exibir_pagina_favoritos():
         if col_l2.button("Criar Lista", use_container_width=True) and nova_lista_nome:
             if nova_lista_nome not in st.session_state.watchlist:
                 st.session_state.watchlist[nova_lista_nome] = []
+                st.session_state.lista_selecionada = nova_lista_nome
                 salvar_watchlist()
                 st.session_state.msg_sucesso = "Lista criada com sucesso"
                 st.rerun()
@@ -1363,7 +1386,27 @@ def exibir_pagina_favoritos():
     
     st.markdown("---")
     c1, c2, c3 = st.columns([2, 2, 1])
-    lista_atual = c1.selectbox("Selecione a Lista", list(st.session_state.watchlist.keys()))
+    
+    # Sincroniza o índice da lista selecionada para evitar o reset ao atualizar as cotações
+    opcoes_disponiveis = list(st.session_state.watchlist.keys())
+    idx_selecionado = 0
+    if st.session_state.lista_selecionada in opcoes_disponiveis:
+        idx_selecionado = opcoes_disponiveis.index(st.session_state.lista_selecionada)
+
+    # Removemos o 'key' para evitar conflitos de sincronização interna do Streamlit durante o rerun
+    lista_selecao = c1.selectbox(
+        "Selecione a Lista", 
+        options=opcoes_disponiveis,
+        index=idx_selecionado
+    )
+    
+    # Se a seleção mudou manualmente, atualizamos o estado e forçamos o rerun
+    if lista_selecao != st.session_state.lista_selecionada:
+        st.session_state.lista_selecionada = lista_selecao
+        st.rerun()
+
+    lista_atual = st.session_state.lista_selecionada
+
     novo_ativo_lista = c2.text_input("Adicionar ativo à lista", placeholder="PETR4.SA, AAPL...")
     c3.markdown('<div style="margin-top: 28px;"></div>', unsafe_allow_html=True)
     if c3.button("Adicionar", use_container_width=True) and novo_ativo_lista:
@@ -1495,6 +1538,8 @@ def exibir_pagina_favoritos():
             st.markdown(f"<div style='font-size: 11px; color: #6b7280; margin-bottom: 5px;'>Última atualização dos dados: {st.session_state.last_updated}</div>", unsafe_allow_html=True)
             if st.button(f"Excluir Lista '{lista_atual}'", type="secondary"):
                 del st.session_state.watchlist[lista_atual]
+                if st.session_state.watchlist:
+                    st.session_state.lista_selecionada = list(st.session_state.watchlist.keys())[0]
                 salvar_watchlist()
                 st.rerun()
         else:
@@ -1560,10 +1605,14 @@ try:
         dividend_yield_formatado = calcular_dividend_yield_12m(ticker, preco_atual, info)
 
         with st.container(key="asset_header"):
-            logo_col, text_col, fav_col = st.columns([0.06, 1, 0.2], gap="small")
+            logo_col, text_col, fav_col = st.columns([0.1, 1, 0.2], gap="small")
 
             with logo_col:
-                st.markdown(criar_logo_fallback(ticker), unsafe_allow_html=True)
+                logo_url = info.get("logo_url")
+                if logo_url:
+                    st.markdown(f'<img src="{logo_url}" class="asset-logo">', unsafe_allow_html=True)
+                else:
+                    st.markdown(criar_logo_fallback(ticker), unsafe_allow_html=True)
 
             with text_col:
                 st.markdown(
