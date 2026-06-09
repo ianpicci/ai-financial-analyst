@@ -376,6 +376,18 @@ st.markdown("""
 .ai-card + .stButton > button:hover {
     background-color: #111827 !important;
 }
+
+/* ===== AJUSTE INTERATIVIDADE (MENUS E SELECTBOXES) ===== */
+div[data-testid="stSelectbox"], 
+div[data-testid="stSelectbox"] * {
+    cursor: pointer !important;
+    user-select: none !important;
+}
+
+div[data-testid="stSelectbox"] input {
+    caret-color: transparent !important;
+    pointer-events: none !important; /* Impede digitação e seleção de texto */
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1227,6 +1239,9 @@ if "listas_sort" not in st.session_state:
 if "pagina" not in st.session_state:
     st.session_state.pagina = "Análise"
 
+if "last_updated" not in st.session_state:
+    st.session_state.last_updated = pd.Timestamp.now().strftime("%H:%M:%S")
+
 # simulador acompanha mudança do gráfico (apenas visualmente)
 if "sim_period" not in st.session_state:
      # encontra o rótulo correspondente ao período atual
@@ -1241,12 +1256,19 @@ with st.container(key="top_bar"):
     top_col_nav, top_col_search, top_col_spacer = st.columns([1.5, 2, 1.5], gap="small")
 
     with top_col_nav:
-        st.session_state.pagina = st.selectbox(
-            "Navegação",
-            ["Análise", "Listas"],
-            label_visibility="collapsed",
-            index=0 if st.session_state.pagina == "Análise" else 1
-        )
+        nav_col, refresh_col = st.columns([0.8, 0.2])
+        with nav_col:
+            st.session_state.pagina = st.selectbox(
+                "Navegação",
+                ["Análise", "Listas"],
+                label_visibility="collapsed",
+                index=0 if st.session_state.pagina == "Análise" else 1
+            )
+        with refresh_col:
+            if st.button("🔄", help=f"Forçar atualização de dados. Última atualização: {st.session_state.last_updated}"):
+                st.cache_data.clear()
+                st.session_state.last_updated = pd.Timestamp.now().strftime("%H:%M:%S")
+                st.rerun()
 
     with top_col_search:
         with st.form(key="form_ativo"):
@@ -1325,12 +1347,19 @@ def exibir_pagina_favoritos():
         return
 
     # Filtros e Adição
-    f_col_sort, f_col_spacer = st.columns([1, 2.5])
+    f_col_sort, f_col_ref, f_col_spacer = st.columns([1, 0.2, 2.3])
     with f_col_sort:
         st.session_state.listas_sort = st.selectbox(
             "Ordenar por", 
             options=["Alfabeto", "Preço", "Variação (%)"]
         )
+    with f_col_ref:
+        st.markdown('<div style="margin-top: 28px;"></div>', unsafe_allow_html=True)
+        if st.button("🔄", key="ref_listas", help=f"Atualizar cotações da lista. Última atualização: {st.session_state.last_updated}"):
+            # Limpa o cache para garantir que buscar_info e buscar_historico tragam dados novos
+            st.cache_data.clear()
+            st.session_state.last_updated = pd.Timestamp.now().strftime("%H:%M:%S")
+            st.rerun()
     
     st.markdown("---")
     c1, c2, c3 = st.columns([2, 2, 1])
@@ -1394,6 +1423,45 @@ def exibir_pagina_favoritos():
 
             # Design em Cards (Caixinhas)
             cols_per_row = 5
+            
+            # CSS injetado uma única vez para garantir o visual dos 3 pontos (⋮)
+            st.markdown("""
+                <style>
+                div[data-testid="stPopover"] {
+                    margin-top: -125px !important; 
+                    display: flex !important;
+                    justify-content: flex-end !important;
+                    background: transparent !important;
+                    z-index: 100 !important;
+                }
+                
+                div[data-testid="stPopover"] > button {
+                    background: none !important;
+                    background-color: transparent !important;
+                    border: none !important;
+                    box-shadow: none !important;
+                    color: white !important;
+                    font-size: 26px !important;
+                    font-weight: 900 !important;
+                    padding: 0 !important;
+                    margin-right: 12px !important;
+                    min-height: unset !important;
+                }
+
+                div[data-testid="stPopover"] > button:hover, 
+                div[data-testid="stPopover"] > button:active, 
+                div[data-testid="stPopover"] > button:focus {
+                    background: transparent !important;
+                    background-color: transparent !important;
+                    color: #cbd5e1 !important;
+                }
+
+                div[data-testid="stPopover"] [data-testid="stIcon"] {
+                    display: none !important;
+                }
+                </style>
+            """, unsafe_allow_html=True)
+
             for i in range(0, len(lista_resumo), cols_per_row):
                 row_items = lista_resumo[i : i + cols_per_row]
                 cols = st.columns(cols_per_row)
@@ -1402,7 +1470,7 @@ def exibir_pagina_favoritos():
                     with cols[idx]:
                         cor_fundo = "#166534" if item["Variação (%)"] >= 0 else "#991b1b"
                         seta = "▲" if item["Variação (%)"] >= 0 else "▼"
-                        
+
                         # Card unificado com ticker, preço e valorização
                         st.markdown(f"""
                             <div style="background-color: {cor_fundo}; padding: 18px 12px; border-radius: 12px; color: white; text-align: center; min-height: 125px;">
@@ -1412,37 +1480,19 @@ def exibir_pagina_favoritos():
                             </div>
                         """, unsafe_allow_html=True)
 
-                        # CSS para posicionar o menu ⋮ no topo direito da caixinha
-                        st.markdown("""
-                            <style>
-                            div[data-testid="stPopover"] {
-                                text-align: right;
-                                margin-top: -128px;
-                                margin-right: 5px;
-                            }
-                            div[data-testid="stPopover"] button {
-                                background: transparent !important;
-                                border: none !important;
-                                color: white !important;
-                                font-size: 22px !important;
-                                padding: 0 !important;
-                                min-height: unset !important;
-                            }
-                            </style>
-                        """, unsafe_allow_html=True)
-
-                        with st.popover("⋮", key=f"menu_{item['Ativo']}"):
+                        with st.popover("**⋮**", key=f"menu_{item['Ativo']}"):
                             if st.button("Ver", key=f"view_{item['Ativo']}", use_container_width=True):
                                 st.session_state.ticker = item['Ativo']
                                 st.session_state.pagina = "Análise"
                                 st.rerun()
-                            if st.button("Remover", key=f"del_{item['Ativo']}", use_container_width=True):
+                            if st.button("Excluir", key=f"del_{item['Ativo']}", use_container_width=True):
                                 st.session_state.watchlist[lista_atual].remove(item['Ativo'])
                                 salvar_watchlist()
                                 st.rerun()
                         st.markdown("<div style='margin-bottom:25px;'></div>", unsafe_allow_html=True)
             
             st.markdown("---")
+            st.markdown(f"<div style='font-size: 11px; color: #6b7280; margin-bottom: 5px;'>Última atualização dos dados: {st.session_state.last_updated}</div>", unsafe_allow_html=True)
             if st.button(f"Excluir Lista '{lista_atual}'", type="secondary"):
                 del st.session_state.watchlist[lista_atual]
                 salvar_watchlist()
@@ -1650,6 +1700,7 @@ try:
                     """,
                 unsafe_allow_html=True
             )
+            st.markdown(f"<div style='font-size: 10px; color: #6b7280; text-align: right; margin-top: 4px;'>Última atualização: {st.session_state.last_updated}</div>", unsafe_allow_html=True)
 
         with info_col:
             st.markdown(
