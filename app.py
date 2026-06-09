@@ -385,15 +385,31 @@ st.markdown("""
 }
 
 /* ===== AJUSTE INTERATIVIDADE (MENUS E SELECTBOXES) ===== */
-div[data-testid="stSelectbox"], 
-div[data-testid="stSelectbox"] * {
+div[data-testid="stSelectbox"]:not(.st-key-search_container *), 
+div[data-testid="stSelectbox"]:not(.st-key-search_container *) * {
     cursor: pointer !important;
     user-select: none !important;
 }
 
-div[data-testid="stSelectbox"] input {
+div[data-testid="stSelectbox"]:not(.st-key-search_container *) input {
     caret-color: transparent !important;
     pointer-events: none !important; /* Impede digitação e seleção de texto */
+}
+
+.st-key-search_container div[data-testid="stSelectbox"] input {
+    cursor: text !important;
+    pointer-events: auto !important;
+    caret-color: #31333F !important;
+    user-select: auto !important;
+}
+
+.st-key-search_container div[data-testid="stSelectbox"] input::placeholder {
+    color: white !important;
+    opacity: 1 !important;
+}
+
+.st-key-search_container div[data-testid="stSelectbox"] input:focus::placeholder {
+    color: transparent !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -457,6 +473,22 @@ def obter_brapi_token():
 
 def normalizar_ticker_brapi(ticker):
     return ticker.strip().upper().replace(".SA", "")
+
+
+@st.cache_data(ttl=86400)
+def obter_lista_sugestoes_ativos():
+    """Busca a lista de todos os ativos disponíveis para o auto-complete"""
+    try:
+        token = obter_brapi_token()
+        url = "https://brapi.dev/api/quote/list"
+        params = {"token": token} if token else {}
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code == 200:
+            dados = response.json().get("stocks", [])
+            return [f"{s['stock']} - {s.get('name', '')}" for s in dados]
+    except:
+        pass
+    return ["PETR4 - PETROLEO BRASILEIRO", "VALE3 - VALE S.A.", "ITUB4 - ITAU UNIBANCO"]
 
 
 def obter_valor_aninhado(dados, caminhos):
@@ -1293,25 +1325,35 @@ with st.container(key="top_bar"):
                 st.rerun()
 
     with top_col_search:
-        with st.form(key="form_ativo"):
-            search_col, button_col = st.columns([9, 1])
+        # Busca a lista de ativos para sugestão
+        sugestoes = obter_lista_sugestoes_ativos()
+        
+        # Identifica o índice do ativo atual para manter o seletor sincronizado
+        ticker_atual_base = st.session_state.ticker.replace(".SA", "")
+        try:
+            idx_inicial = [s.split(" - ")[0] for s in sugestoes].index(ticker_atual_base)
+        except:
+            idx_inicial = 0
 
-            with search_col:
-                ticker_digitado = st.text_input(
-                    "Pesquisar ativo",
-                    value="",
-                    placeholder="Pesquisar por ativos",
-                    label_visibility="collapsed"
-                )
-
-            with button_col:
-                analisar = st.form_submit_button("🔍")
+        with st.container(key="search_container"):
+            placeholder_texto = sugestoes[idx_inicial] if idx_inicial < len(sugestoes) else st.session_state.ticker
+            escolha = st.selectbox(
+                "Pesquisar ativo",
+                options=sugestoes,
+                index=None,
+                placeholder=placeholder_texto,
+                label_visibility="collapsed",
+                help="Digite o ticker (ex: ITUB) para filtrar"
+            )
+        
+        ticker_selecionado = normalizar_ticker(escolha.split(" - ")[0]) if escolha else st.session_state.ticker
 
     with top_col_spacer:
         st.markdown('<div class="top-title" style="text-align:right">AI Analyst</div>', unsafe_allow_html=True)
 
-if analisar and ticker_digitado.strip() != "":
-    st.session_state.ticker = normalizar_ticker(ticker_digitado)
+# Lógica de atualização após a busca
+if ticker_selecionado != st.session_state.ticker:
+    st.session_state.ticker = ticker_selecionado
     st.session_state.periodo = "1d"
     st.session_state.analise_ia = ""
     st.session_state.pagina = "Análise"
@@ -1322,6 +1364,7 @@ if analisar and ticker_digitado.strip() != "":
             sim_label = k
             break
     st.session_state.sim_period = sim_label or "1D"
+    st.rerun()
 
 def criar_sparkline(df, cor_fundo):
     fig = go.Figure()
