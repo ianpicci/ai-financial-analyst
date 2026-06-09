@@ -1,6 +1,10 @@
+<<<<<<< HEAD
 venv/
 __pycache__/
 .env
 *.pyc
 *.bak
 *.backup
+=======
+.env
+>>>>>>> f381429585afdbc93e74da1623c552ddc845593f

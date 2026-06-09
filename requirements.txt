@@ -3,6 +3,11 @@ yfinance
 plotly
 pandas
 numpy
+<<<<<<< HEAD
 openai
 python-dotenv
+=======
+openai
+python-dotenv
+>>>>>>> f381429585afdbc93e74da1623c552ddc845593f
 requests
